@@ -1,0 +1,1 @@
+pacman.interfaces.Renderable
