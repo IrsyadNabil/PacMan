@@ -1,6 +1,6 @@
 package pacman.model.ghost;
 
-import pacman.model.Entity;
+import model.Entity;
 import pacman.model.GameMap;
 import pacman.model.PacMan;
 import pacman.util.Direction;

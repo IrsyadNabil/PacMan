@@ -1,4 +1,4 @@
-package pacman.model;
+package model;
 
 import pacman.interfaces.Collidable;
 import pacman.interfaces.Movable;

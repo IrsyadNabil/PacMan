@@ -1,5 +1,6 @@
 package pacman.model;
 
+import model.Entity;
 import pacman.util.Direction;
 
 import java.awt.*;
@@ -42,7 +43,22 @@ public class PacMan extends Entity {
         setDirection(Direction.LEFT);
         setNextDirection(Direction.LEFT);
     }
+    
+    private boolean canMoveInDirection(Direction dir) {
+    int nextX = getX() + dir.getDx() * getSpeed();
+    int nextY = getY() + dir.getDy() * getSpeed();
 
+    int leftCol   = nextX / tileSize;
+    int rightCol  = (nextX + tileSize - 2) / tileSize;
+    int topRow    = nextY / tileSize;
+    int bottomRow = (nextY + tileSize - 2) / tileSize;
+
+    return gameMap.isWalkable(topRow, leftCol)
+        && gameMap.isWalkable(topRow, rightCol)
+        && gameMap.isWalkable(bottomRow, leftCol)
+        && gameMap.isWalkable(bottomRow, rightCol);
+    }
+    
     /**
      * Polymorphism: overrides abstract move() from Entity
      */
@@ -55,15 +71,16 @@ public class PacMan extends Entity {
 
         // Try to turn in the queued direction first
         Direction next = getNextDirection();
-        int col = getTileCol();
-        int row = getTileRow();
 
-        if (gameMap.canMove(row, col, next)) {
+        if (isCenteredOnTile() && canMoveInDirection(next)) {
             setDirection(next);
         }
 
         Direction dir = getDirection();
-        if (!gameMap.canMove(row, col, dir)) return;
+
+        if (!canMoveInDirection(dir)) {
+            return;
+        }
 
         int newX = getX() + dir.getDx() * getSpeed();
         int newY = getY() + dir.getDy() * getSpeed();
@@ -75,6 +92,11 @@ public class PacMan extends Entity {
 
         setX(newX);
         setY(newY);
+        
+        if (getX() % tileSize == 0 &&
+            getY() % tileSize == 0) {
+            snapToGrid();
+        }
 
         // Animate mouth
         animateMouth();
@@ -180,7 +202,12 @@ public class PacMan extends Entity {
     public void addScore(int points) {
         this.score += points;
     }
-
+    
+    private boolean isCenteredOnTile() {
+    return getX() % tileSize == 0 &&
+           getY() % tileSize == 0;
+    }
+    
     // Getters and Setters (Encapsulation)
     public int getLives() { return lives; }
     public int getScore() { return score; }
