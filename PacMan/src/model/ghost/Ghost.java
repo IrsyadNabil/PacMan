@@ -16,37 +16,37 @@ import java.util.Random;
  * Inheritance: extends Entity
  *
  * Siklus mode sesuai spesifikasi:
- *   SCATTER/CHASE → (power pellet) → FRIGHTENED
- *   FRIGHTENED    → (dimakan)      → EATEN
- *   EATEN         → (sampai spawn) → RESPAWNING
- *   RESPAWNING    → (timer habis)  → SCATTER/CHASE
+ *   SCATTER/CHASE  → (power pellet dimakan) → FRIGHTENED
+ *   FRIGHTENED     → (dimakan Pac-Man)       → EATEN
+ *   EATEN          → (sampai spawn point)    → RESPAWNING
+ *   RESPAWNING     → (timer habis)           → SCATTER/CHASE
  */
 public abstract class Ghost extends Entity {
 
-    // ── Mode ─────────────────────────────────────────────────────────────
+    // ── Mode ─────────────────────────────────────────────────────────────────
     public enum GhostMode {
         CHASE,       // Mengejar Pac-Man
-        SCATTER,     // Mundur ke sudut
+        SCATTER,     // Mundur ke sudut peta
         FRIGHTENED,  // Biru – bisa dimakan Pac-Man
         EATEN,       // Kembali ke spawn (tampil hanya mata)
         RESPAWNING   // Diam di spawn, hitung mundur sebelum aktif kembali
     }
 
-    // ── Konstanta ─────────────────────────────────────────────────────────
+    // ── Konstanta ─────────────────────────────────────────────────────────────
     private static final int FRIGHTENED_DURATION = 300; // ~5 detik @ 60fps
-    private static final int FLASH_START         = 80;  // kedip 80 frame sebelum habis
-    private static final int RESPAWN_DURATION    = 180; // ~3 detik diam di spawn
+    private static final int FLASH_START         = 80;  // mulai berkedip 80 frame sebelum habis
+    private static final int RESPAWN_DURATION    = 180; // ~3 detik diam di dalam rumah
     private static final int SPEED_NORMAL        = 2;
     private static final int SPEED_FRIGHTENED    = 1;
-    private static final int SPEED_EATEN         = 4;   // cepat balik ke rumah
+    private static final int SPEED_EATEN         = 4;   // cepat kembali ke rumah
 
-    // ── State ─────────────────────────────────────────────────────────────
+    // ── State ─────────────────────────────────────────────────────────────────
     private GhostMode mode;
     private GhostMode previousMode;
     private final Color normalColor;
 
-    private boolean inHouse;   // belum keluar pertama kali dari rumah
-    private int houseTimer;    // delay sebelum keluar pertama kali
+    private boolean inHouse;  // belum keluar pertama kali
+    private int houseTimer;   // delay awal sebelum keluar
 
     private int frightenedTimer;
     private boolean flashingWhite;
@@ -56,13 +56,16 @@ public abstract class Ghost extends Entity {
     private final int spawnX;
     private final int spawnY;
 
+    // Referensi PacMan untuk AI chase — di-set oleh GameController
+    private PacMan trackedPacman;
+
     protected final GameMap gameMap;
-    protected final Random random;
+    protected final Random  random;
 
     protected int scatterRow;
     protected int scatterCol;
 
-    // ── Constructor ───────────────────────────────────────────────────────
+    // ── Constructor ───────────────────────────────────────────────────────────
     public Ghost(int x, int y, int tileSize, GameMap gameMap,
                  Color color, int houseDelay) {
         super(x, y, SPEED_NORMAL, tileSize);
@@ -78,18 +81,23 @@ public abstract class Ghost extends Entity {
         setDirection(Direction.UP);
     }
 
-    // ── Abstract ──────────────────────────────────────────────────────────
+    // ── Abstract ──────────────────────────────────────────────────────────────
     /**
-     * Setiap subclass menentukan target tile-nya sendiri.
-     * Polimorfisme: Blinky, Pinky, Inky, Clyde implementasi berbeda.
+     * Tiap subclass menentukan target tile-nya sendiri (AI behavior).
+     * Polymorphism: Blinky, Pinky, Inky, Clyde punya implementasi berbeda.
      */
     public abstract int[] getTargetTile(PacMan pacman);
 
-    // ── Move ──────────────────────────────────────────────────────────────
+    // ── Setter PacMan (dipanggil GameController setelah initGame) ─────────────
+    public void setTrackedPacman(PacMan pacman) {
+        this.trackedPacman = pacman;
+    }
+
+    // ── Move ──────────────────────────────────────────────────────────────────
     @Override
     public void move() {
 
-        // RESPAWNING: diam di spawn, hitung mundur
+        // RESPAWNING: diam di spawn, tunggu timer
         if (mode == GhostMode.RESPAWNING) {
             respawnTimer--;
             if (respawnTimer <= 0) {
@@ -103,7 +111,7 @@ public abstract class Ghost extends Entity {
             return;
         }
 
-        // INHOUSE: belum keluar untuk pertama kali
+        // INHOUSE (awal): belum keluar pertama kali
         if (inHouse) {
             houseTimer--;
             if (houseTimer <= 0) {
@@ -115,12 +123,12 @@ public abstract class Ghost extends Entity {
             return;
         }
 
-        // Hitung mundur frightened
+        // Hitung mundur frightened timer
         if (mode == GhostMode.FRIGHTENED) {
             frightenedTimer--;
             flashingWhite = frightenedTimer < FLASH_START && (frightenedTimer / 10) % 2 == 0;
             if (frightenedTimer <= 0) {
-                // Efek power pellet habis → kembali ke mode sebelumnya
+                // Power Pellet habis → kembali ke mode sebelumnya
                 mode          = previousMode;
                 flashingWhite = false;
                 setSpeed(SPEED_NORMAL);
@@ -132,31 +140,32 @@ public abstract class Ghost extends Entity {
         int col  = getTileCol();
         int newX = getX() + getDirection().getDx() * getSpeed();
         int newY = getY() + getDirection().getDy() * getSpeed();
-        int newCol = (newX + tileSize / 2) / tileSize;
         int newRow = (newY + tileSize / 2) / tileSize;
+        int newCol = (newX + tileSize / 2) / tileSize;
 
         if (!gameMap.isWalkable(newRow, newCol)) {
-            chooseNewDirection(row, col, null);
+            // Tabrak tembok → pilih arah baru
+            chooseNewDirection(row, col);
         } else {
             setX(newX);
             setY(newY);
+            // Di tiap tile center → tentukan arah berikutnya
             if (isAtTileCenter()) {
                 snapToGrid();
-                chooseNewDirection(getTileRow(), getTileCol(), null);
+                chooseNewDirection(getTileRow(), getTileCol());
             }
         }
 
         // Tunnel wrap kiri-kanan
         int mapWidth = gameMap.getCols() * tileSize;
-        if (getX() < -tileSize)  setX(mapWidth - tileSize);
-        if (getX() >= mapWidth)  setX(0);
+        if (getX() < -tileSize) setX(mapWidth - tileSize);
+        if (getX() >= mapWidth) setX(0);
 
-        // Cek apakah ghost EATEN sudah sampai di area spawn
+        // EATEN: cek apakah sudah cukup dekat dengan spawn point
         if (mode == GhostMode.EATEN) {
-            int targetRow = spawnY / tileSize;
-            int targetCol = spawnX / tileSize;
-            if (Math.abs(getTileRow() - targetRow) <= 1 &&
-                Math.abs(getTileCol() - targetCol) <= 1) {
+            int spawnTileRow = spawnY / tileSize;
+            int spawnTileCol = spawnX / tileSize;
+            if (getTileRow() == spawnTileRow && getTileCol() == spawnTileCol) {
                 arriveAtSpawn();
             }
         }
@@ -166,17 +175,19 @@ public abstract class Ghost extends Entity {
         return getX() % tileSize == 0 && getY() % tileSize == 0;
     }
 
-    // ── Pilih arah baru ───────────────────────────────────────────────────
-    protected void chooseNewDirection(int row, int col, PacMan pacman) {
+    // ── Pilih arah baru ───────────────────────────────────────────────────────
+    protected void chooseNewDirection(int row, int col) {
         List<Direction> valid = getValidDirections(row, col);
+
         if (valid.isEmpty()) {
+            // Dead end: paksa balik arah
             setDirection(getDirection().opposite());
             return;
         }
 
         switch (mode) {
             case FRIGHTENED:
-                // Bergerak ACAK saat frightened
+                // ACAK saat frightened — tidak mengejar Pac-Man
                 setDirection(valid.get(random.nextInt(valid.size())));
                 break;
 
@@ -190,9 +201,10 @@ public abstract class Ghost extends Entity {
                 break;
 
             case CHASE:
-                if (pacman != null) {
-                    int[] t = getTargetTile(pacman);
-                    moveToward(row, col, t[0], t[1], valid);
+                // FIX UTAMA: gunakan trackedPacman (bukan parameter null)
+                if (trackedPacman != null) {
+                    int[] target = getTargetTile(trackedPacman);
+                    moveToward(row, col, target[0], target[1], valid);
                 } else {
                     setDirection(valid.get(0));
                 }
@@ -207,8 +219,8 @@ public abstract class Ghost extends Entity {
         List<Direction> list = new ArrayList<>();
         Direction current    = getDirection();
         for (Direction dir : Direction.values()) {
-            if (dir == Direction.NONE)         continue;
-            if (dir == current.opposite())     continue; // dilarang balik arah
+            if (dir == Direction.NONE)     continue;
+            if (dir == current.opposite()) continue; // dilarang balik 180°
             if (gameMap.isWalkable(row + dir.getDy(), col + dir.getDx()))
                 list.add(dir);
         }
@@ -228,15 +240,33 @@ public abstract class Ghost extends Entity {
         setDirection(best);
     }
 
-    // ── Update AI (dipanggil controller tiap frame) ───────────────────────
-    public void updateAI(PacMan pacman) {
-        if (inHouse || mode == GhostMode.FRIGHTENED
-                    || mode == GhostMode.EATEN
-                    || mode == GhostMode.RESPAWNING) return;
-        chooseNewDirection(getTileRow(), getTileCol(), pacman);
+    // ── Update AI (dipanggil controller tiap frame) ───────────────────────────
+    /**
+     * Mengatur mode CHASE vs SCATTER berdasarkan global timer.
+     * Hanya aktif saat ghost bebas bergerak (bukan FRIGHTENED/EATEN/RESPAWNING).
+     */
+    public void updateAI(PacMan pacman, int globalTimer) {
+        if (inHouse
+                || mode == GhostMode.FRIGHTENED
+                || mode == GhostMode.EATEN
+                || mode == GhostMode.RESPAWNING) return;
+
+        // Pola SCATTER/CHASE klasik Pac-Man (dalam frame @ 60fps):
+        // 0–419: SCATTER | 420–1259: CHASE | 1260–1679: SCATTER | 1680+: CHASE
+        int t = globalTimer % 3360;
+        GhostMode targetMode;
+        if      (t < 420)  targetMode = GhostMode.SCATTER;
+        else if (t < 1260) targetMode = GhostMode.CHASE;
+        else if (t < 1680) targetMode = GhostMode.SCATTER;
+        else               targetMode = GhostMode.CHASE;
+
+        if (targetMode != mode) {
+            setDirection(getDirection().opposite()); // balik arah saat ganti mode
+            mode = targetMode;
+        }
     }
 
-    // ── Event: Power Pellet dimakan → semua ghost frightened ──────────────
+    // ── Event: Power Pellet dimakan → ghost masuk FRIGHTENED ─────────────────
     public void setFrightened() {
         if (mode == GhostMode.EATEN || mode == GhostMode.RESPAWNING) return;
         previousMode    = (mode == GhostMode.FRIGHTENED) ? previousMode : mode;
@@ -244,19 +274,18 @@ public abstract class Ghost extends Entity {
         frightenedTimer = FRIGHTENED_DURATION;
         flashingWhite   = false;
         setSpeed(SPEED_FRIGHTENED);
-        setDirection(getDirection().opposite()); // balik arah seketika
+        setDirection(getDirection().opposite()); // langsung balik arah
     }
 
-    // ── Event: Ghost dimakan Pac-Man → mode EATEN ─────────────────────────
+    // ── Event: Ghost dimakan Pac-Man → mode EATEN ─────────────────────────────
     public void setEaten() {
         mode            = GhostMode.EATEN;
         frightenedTimer = 0;
         flashingWhite   = false;
-        setSpeed(SPEED_EATEN);
-        // Ghost langsung menuju spawn point
+        setSpeed(SPEED_EATEN); // bergerak lebih cepat kembali ke rumah
     }
 
-    // ── Tiba di spawn point (dari mode EATEN) → RESPAWNING ───────────────
+    // ── Tiba di spawn point (dari EATEN) → masuk RESPAWNING ──────────────────
     private void arriveAtSpawn() {
         setX(spawnX);
         setY(spawnY);
@@ -264,9 +293,10 @@ public abstract class Ghost extends Entity {
         respawnTimer = RESPAWN_DURATION;
         setSpeed(0);
         setDirection(Direction.UP);
+        previousMode = GhostMode.SCATTER; // setelah respawn mulai dari SCATTER
     }
 
-    // ── Reset penuh (level baru / game restart) ───────────────────────────
+    // ── Reset penuh (level baru / Pac-Man mati / restart) ────────────────────
     public void respawn(int x, int y, int houseDelay) {
         setX(x); setY(y);
         mode          = GhostMode.SCATTER;
@@ -280,10 +310,10 @@ public abstract class Ghost extends Entity {
         setDirection(Direction.UP);
     }
 
-    // ── Render ────────────────────────────────────────────────────────────
+    // ── Render ────────────────────────────────────────────────────────────────
     @Override
     public void render(Graphics2D g2d) {
-        // Ghost tidak terlihat saat sedang respawning di dalam rumah
+        // Tidak terlihat saat sedang diam respawn di rumah
         if (mode == GhostMode.RESPAWNING) return;
 
         int x = getX(), y = getY(), w = tileSize - 2, h = tileSize - 2;
@@ -291,7 +321,7 @@ public abstract class Ghost extends Entity {
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 
         if (mode == GhostMode.EATEN) {
-            // Hanya tampilkan mata — ghost sedang kembali ke spawn
+            // Hanya tampilkan mata — ghost "terbang" kembali ke rumah
             drawEyes(g, x, y, w, h);
             g.dispose();
             return;
@@ -305,12 +335,12 @@ public abstract class Ghost extends Entity {
             bodyColor = normalColor;
         }
 
-        // Gambar tubuh
+        // Gambar tubuh utama
         g.setColor(bodyColor);
-        g.fillArc(x, y, w, h, 0, 180);
-        g.fillRect(x, y + h / 2, w, h / 2);
+        g.fillArc(x, y, w, h, 0, 180);           // setengah lingkaran atas
+        g.fillRect(x, y + h / 2, w, h / 2);      // kotak bawah
 
-        // Bawah bergelombang
+        // Bawah bergelombang (3 lengkungan)
         int waveW = w / 3;
         for (int i = 0; i < 3; i++) {
             g.setColor(Color.BLACK);
@@ -318,23 +348,9 @@ public abstract class Ghost extends Entity {
             g.setColor(bodyColor);
         }
 
-        // Gambar mata
+        // Gambar mata sesuai mode
         if (mode == GhostMode.FRIGHTENED) {
-            // Ekspresi ketakutan
-            g.setColor(Color.WHITE);
-            g.fillOval(x + w / 4 - 2, y + h / 4, 6, 6);
-            g.fillOval(x + 3 * w / 4 - 4, y + h / 4, 6, 6);
-            g.setColor(new Color(200, 0, 0));
-            g.fillOval(x + w / 4,       y + h / 4 + 1, 3, 3);
-            g.fillOval(x + 3 * w / 4 - 2, y + h / 4 + 1, 3, 3);
-            // Mulut zigzag
-            g.setColor(new Color(200, 0, 0));
-            int mx = x + 3, my = y + h * 2 / 3;
-            for (int i = 0; i < 4; i++) {
-                int zx = mx + i * (w - 6) / 4;
-                int zy = my + (i % 2 == 0 ? 3 : -3);
-                g.fillRect(zx, zy, (w - 6) / 4, 2);
-            }
+            drawFrightenedFace(g, x, y, w, h);
         } else {
             drawEyes(g, x, y, w, h);
         }
@@ -342,33 +358,48 @@ public abstract class Ghost extends Entity {
         g.dispose();
     }
 
+    /** Mata normal — pupil mengikuti arah gerak */
     private void drawEyes(Graphics2D g, int x, int y, int w, int h) {
         g.setColor(Color.WHITE);
         g.fillOval(x + w / 4 - 3, y + h / 4, 8, 8);
         g.fillOval(x + 3 * w / 4 - 5, y + h / 4, 8, 8);
-        // Pupil mengikuti arah gerak
-        int px = 0, py = 0;
-        switch (getDirection()) {
-            case UP:    px =  0; py = -2; break;
-            case DOWN:  px =  0; py =  2; break;
-            case LEFT:  px = -2; py =  0; break;
-            case RIGHT: px =  2; py =  0; break;
-            default: break;
-        }
-        g.setColor(new Color(0, 0, 200));
+        // Pupil mengikuti arah gerakan
+        int px = getDirection().getDx() * 2;
+        int py = getDirection().getDy() * 2;
+        g.setColor(new Color(0, 0, 180));
         g.fillOval(x + w / 4 - 1 + px, y + h / 4 + 2 + py, 4, 4);
         g.fillOval(x + 3 * w / 4 - 3 + px, y + h / 4 + 2 + py, 4, 4);
     }
 
-    // ── Getters ───────────────────────────────────────────────────────────
-    public GhostMode getMode()              { return mode; }
-    public void setMode(GhostMode mode)     { this.mode = mode; }
-    public Color getNormalColor()           { return normalColor; }
-    public boolean isInHouse()              { return inHouse; }
-    public boolean isFrightened()           { return mode == GhostMode.FRIGHTENED; }
-    public boolean isEaten()                { return mode == GhostMode.EATEN; }
-    public boolean isRespawning()           { return mode == GhostMode.RESPAWNING; }
-    public int getFrightenedTimer()         { return frightenedTimer; }
-    public int getSpawnX()                  { return spawnX; }
-    public int getSpawnY()                  { return spawnY; }
+    /** Wajah ketakutan saat FRIGHTENED */
+    private void drawFrightenedFace(Graphics2D g, int x, int y, int w, int h) {
+        // Mata putih kecil
+        g.setColor(Color.WHITE);
+        g.fillOval(x + w / 4 - 2, y + h / 4, 6, 6);
+        g.fillOval(x + 3 * w / 4 - 4, y + h / 4, 6, 6);
+        // Pupil merah
+        g.setColor(new Color(200, 0, 0));
+        g.fillOval(x + w / 4,         y + h / 4 + 1, 3, 3);
+        g.fillOval(x + 3 * w / 4 - 2, y + h / 4 + 1, 3, 3);
+        // Mulut zigzag
+        int mx = x + 3, my = y + h * 2 / 3;
+        int seg = (w - 6) / 4;
+        for (int i = 0; i < 4; i++) {
+            int zx = mx + i * seg;
+            int zy = my + (i % 2 == 0 ? 3 : -3);
+            g.fillRect(zx, zy, seg, 2);
+        }
+    }
+
+    // ── Getters ───────────────────────────────────────────────────────────────
+    public GhostMode getMode()          { return mode; }
+    public void setMode(GhostMode m)    { this.mode = m; }
+    public Color getNormalColor()       { return normalColor; }
+    public boolean isInHouse()          { return inHouse; }
+    public boolean isFrightened()       { return mode == GhostMode.FRIGHTENED; }
+    public boolean isEaten()            { return mode == GhostMode.EATEN; }
+    public boolean isRespawning()       { return mode == GhostMode.RESPAWNING; }
+    public int getFrightenedTimer()     { return frightenedTimer; }
+    public int getSpawnX()              { return spawnX; }
+    public int getSpawnY()              { return spawnY; }
 }

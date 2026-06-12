@@ -7,12 +7,14 @@ import pacman.util.ScoreManager;
 import pacman.view.GamePanel;
 
 import javax.swing.*;
+import java.awt.*;
 import java.awt.event.KeyEvent;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
 /**
- * Main game controller. Coordinates model and view.
+ * Main game controller. Mengkoordinasikan model dan view.
  * MVC: Controller layer.
  * Single Responsibility & Open/Closed principles (SOLID).
  */
@@ -21,16 +23,22 @@ public class GameController {
     private static final int TILE_SIZE            = 20;
     private static final int FPS                  = 60;
     private static final int TIMER_DELAY          = 1000 / FPS;
-    private static final int DEATH_ANIM_DURATION  = 90;   // frames
-    private static final int LEVEL_COMPLETE_PAUSE = 120;  // frames
+    private static final int DEATH_ANIM_DURATION  = 90;   // frame
+    private static final int LEVEL_COMPLETE_PAUSE = 120;  // frame
 
-    // Pac-Man start position
+    // Posisi awal Pac-Man
     private static final int PACMAN_START_X = 13 * TILE_SIZE;
     private static final int PACMAN_START_Y = 23 * TILE_SIZE;
 
-    // Ghost house center (titik exit ghost house)
-    private static final int GHOST_HOUSE_X = 13 * TILE_SIZE;
-    private static final int GHOST_HOUSE_Y = 13 * TILE_SIZE;
+    // Posisi spawn masing-masing ghost (di dalam ghost house)
+    private static final int BLINKY_SPAWN_X = 13 * TILE_SIZE;
+    private static final int BLINKY_SPAWN_Y = 13 * TILE_SIZE;
+    private static final int PINKY_SPAWN_X  = 14 * TILE_SIZE;
+    private static final int PINKY_SPAWN_Y  = 13 * TILE_SIZE;
+    private static final int INKY_SPAWN_X   = 12 * TILE_SIZE;
+    private static final int INKY_SPAWN_Y   = 13 * TILE_SIZE;
+    private static final int CLYDE_SPAWN_X  = 15 * TILE_SIZE;
+    private static final int CLYDE_SPAWN_Y  = 13 * TILE_SIZE;
 
     private GameMap   gameMap;
     private PacMan    pacman;
@@ -41,6 +49,10 @@ public class GameController {
 
     private Timer gameTimer;
     private int   stateTimer;
+    private int   globalTimer;  // untuk pola SCATTER/CHASE
+
+    // Popup skor saat ghost dimakan
+    private final List<ScorePopup> scorePopups = new ArrayList<>();
 
     public GameController(GamePanel panel) {
         this.gamePanel = panel;
@@ -48,25 +60,42 @@ public class GameController {
         setupTimer();
     }
 
-    private void initGame() {
-        gameMap   = new GameMap(TILE_SIZE);
-        gameState = new GameState();
+    // ── Inner class: popup skor saat ghost dimakan ────────────────────────────
+    public static class ScorePopup {
+        public final int x, y, score;
+        public int timer;
+        public ScorePopup(int x, int y, int score) {
+            this.x = x; this.y = y; this.score = score;
+            this.timer = 60; // tampil selama 1 detik
+        }
+    }
 
-        // FIX #4: Load high score dari file saat game dimulai
+    // ── Init ─────────────────────────────────────────────────────────────────
+    private void initGame() {
+        gameMap      = new GameMap(TILE_SIZE);
+        gameState    = new GameState();
+        globalTimer  = 0;
+        scorePopups.clear();
+
         gameState.setHighScore(ScoreManager.loadHighScore());
 
         pacman = new PacMan(PACMAN_START_X, PACMAN_START_Y, TILE_SIZE, gameMap);
 
-        ghosts  = new ArrayList<>();
-        blinky  = new Blinky(GHOST_HOUSE_X,              GHOST_HOUSE_Y, TILE_SIZE, gameMap);
-        Pinky pinky = new Pinky(GHOST_HOUSE_X + TILE_SIZE,   GHOST_HOUSE_Y, TILE_SIZE, gameMap);
-        Inky  inky  = new Inky (GHOST_HOUSE_X - TILE_SIZE,   GHOST_HOUSE_Y, TILE_SIZE, gameMap, blinky);
-        Clyde clyde = new Clyde(GHOST_HOUSE_X + 2 * TILE_SIZE, GHOST_HOUSE_Y, TILE_SIZE, gameMap);
+        ghosts = new ArrayList<>();
+        blinky = new Blinky(BLINKY_SPAWN_X, BLINKY_SPAWN_Y, TILE_SIZE, gameMap);
+        Pinky pinky = new Pinky(PINKY_SPAWN_X, PINKY_SPAWN_Y, TILE_SIZE, gameMap);
+        Inky  inky  = new Inky (INKY_SPAWN_X,  INKY_SPAWN_Y,  TILE_SIZE, gameMap, blinky);
+        Clyde clyde = new Clyde(CLYDE_SPAWN_X, CLYDE_SPAWN_Y, TILE_SIZE, gameMap);
 
         ghosts.add(blinky);
         ghosts.add(pinky);
         ghosts.add(inky);
         ghosts.add(clyde);
+
+        // FIX: berikan referensi PacMan ke tiap ghost agar AI CHASE berfungsi
+        for (Ghost g : ghosts) {
+            g.setTrackedPacman(pacman);
+        }
     }
 
     private void setupTimer() {
@@ -82,14 +111,23 @@ public class GameController {
         if      (state == GameState.State.PLAYING)        updatePlaying();
         else if (state == GameState.State.DEAD_ANIMATION) updateDeathAnimation();
         else if (state == GameState.State.LEVEL_COMPLETE) updateLevelComplete();
+
+        // Update popup skor
+        Iterator<ScorePopup> it = scorePopups.iterator();
+        while (it.hasNext()) {
+            ScorePopup p = it.next();
+            p.timer--;
+            if (p.timer <= 0) it.remove();
+        }
     }
 
     private void updatePlaying() {
+        globalTimer++;
         pacman.move();
 
         for (Ghost g : ghosts) {
+            g.updateAI(pacman, globalTimer);
             g.move();
-            g.updateAI(pacman);
         }
 
         checkCollisions();
@@ -101,13 +139,11 @@ public class GameController {
     }
 
     private void checkCollisions() {
-        // FIX #1: Gunakan flag powerPelletJustEaten (bukan hardcode powerTimer == 199)
-        // sehingga ghost masuk Frightened Mode tepat di frame yang sama Pac-Man
-        // memakan Power Pellet, terlepas dari nilai timer yang tersisa.
+        // Power Pellet baru dimakan → frighten semua ghost
         if (pacman.hasPowerPelletJustEaten()) {
             gameState.resetGhostCombo();
             for (Ghost g : ghosts) {
-                // FIX #2: Ghost yang sedang EATEN atau RESPAWNING tidak difrightened
+                // Ghost EATEN atau RESPAWNING tidak terpengaruh power pellet
                 if (!g.isEaten() && !g.isRespawning()) {
                     g.setFrightened();
                 }
@@ -118,17 +154,19 @@ public class GameController {
             if (!pacman.collidesWith(ghost)) continue;
 
             if (ghost.isFrightened()) {
-                // Pac-Man memakan ghost → ghost masuk EATEN lalu menuju spawn
+                // Pac-Man memakan ghost → ghost masuk EATEN → kembali ke spawn
                 int points = gameState.getGhostEatenScore();
                 pacman.addScore(points);
+                // Tampilkan popup skor di posisi ghost
+                scorePopups.add(new ScorePopup(ghost.getX(), ghost.getY(), points));
                 ghost.setEaten();
 
             } else if (!ghost.isEaten() && !ghost.isRespawning() && pacman.isAlive()) {
-                // FIX #2: Ghost EATEN atau RESPAWNING tidak boleh membunuh Pac-Man
+                // Ghost normal menyentuh Pac-Man → hilang 1 nyawa
                 pacman.die();
                 gameState.triggerDeathAnimation();
                 stateTimer = DEATH_ANIM_DURATION;
-                return; // hentikan pengecekan ghost lain di frame ini
+                return;
             }
         }
     }
@@ -137,9 +175,7 @@ public class GameController {
         stateTimer--;
         if (stateTimer <= 0) {
             if (pacman.getLives() <= 0) {
-                // FIX #4: Simpan high score ke file saat game over
-                int finalScore = pacman.getScore();
-                gameState.updateHighScore(finalScore);
+                gameState.updateHighScore(pacman.getScore());
                 ScoreManager.saveHighScore(gameState.getHighScore());
                 gameState.gameOver();
             } else {
@@ -150,15 +186,13 @@ public class GameController {
 
     private void respawnAfterDeath() {
         pacman.respawn(PACMAN_START_X, PACMAN_START_Y);
-
-        // FIX #3: Tiap ghost dikembalikan ke spawn point-nya sendiri (bukan semua
-        // ke GHOST_HOUSE_X/Y yang sama), dengan delay bertahap agar tidak keluar
-        // bersamaan.
-        int delay = 0;
-        for (Ghost g : ghosts) {
-            g.respawn(g.getSpawnX(), g.getSpawnY(), delay);
-            delay += 30;
-        }
+        // Tiap ghost kembali ke spawn point-nya sendiri dengan delay bertahap
+        blinky.respawn(BLINKY_SPAWN_X, BLINKY_SPAWN_Y, 0);
+        ((Pinky) ghosts.get(1)).respawn(PINKY_SPAWN_X, PINKY_SPAWN_Y, 30);
+        ((Inky)  ghosts.get(2)).respawn(INKY_SPAWN_X,  INKY_SPAWN_Y,  60);
+        ((Clyde) ghosts.get(3)).respawn(CLYDE_SPAWN_X, CLYDE_SPAWN_Y, 90);
+        globalTimer = 0;
+        scorePopups.clear();
         gameState.setCurrentState(GameState.State.PLAYING);
     }
 
@@ -170,14 +204,23 @@ public class GameController {
     private void nextLevel() {
         gameMap.reset();
         pacman.respawn(PACMAN_START_X, PACMAN_START_Y);
-
-        // FIX #3: sama seperti respawnAfterDeath — tiap ghost ke spawn-nya sendiri
-        int delay = 0;
-        for (Ghost g : ghosts) {
-            g.respawn(g.getSpawnX(), g.getSpawnY(), delay);
-            delay += 30;
-        }
+        blinky.respawn(BLINKY_SPAWN_X, BLINKY_SPAWN_Y, 0);
+        ((Pinky) ghosts.get(1)).respawn(PINKY_SPAWN_X, PINKY_SPAWN_Y, 30);
+        ((Inky)  ghosts.get(2)).respawn(INKY_SPAWN_X,  INKY_SPAWN_Y,  60);
+        ((Clyde) ghosts.get(3)).respawn(CLYDE_SPAWN_X, CLYDE_SPAWN_Y, 90);
+        globalTimer = 0;
+        scorePopups.clear();
         gameState.nextLevel();
+    }
+
+    // ── Render popup skor (dipanggil GamePanel) ───────────────────────────────
+    public void renderScorePopups(Graphics2D g2d) {
+        g2d.setFont(new Font("Courier New", Font.BOLD, 12));
+        for (ScorePopup p : scorePopups) {
+            float alpha = Math.min(1f, p.timer / 30f);
+            g2d.setColor(new Color(1f, 1f, 0f, alpha));
+            g2d.drawString(String.valueOf(p.score), p.x, p.y);
+        }
     }
 
     // ── Public API untuk View ─────────────────────────────────────────────────
@@ -219,9 +262,9 @@ public class GameController {
     }
 
     // ── Getters untuk View ────────────────────────────────────────────────────
-    public GameMap    getGameMap()    { return gameMap;    }
-    public PacMan     getPacman()     { return pacman;     }
-    public List<Ghost> getGhosts()   { return ghosts;     }
-    public GameState  getGameState() { return gameState;  }
-    public int        getTileSize()  { return TILE_SIZE;  }
+    public GameMap      getGameMap()    { return gameMap;    }
+    public PacMan       getPacman()     { return pacman;     }
+    public List<Ghost>  getGhosts()     { return ghosts;     }
+    public GameState    getGameState()  { return gameState;  }
+    public int          getTileSize()   { return TILE_SIZE;  }
 }
