@@ -50,10 +50,24 @@ public class PacMan extends Entity {
     private boolean canMoveInDirection(Direction dir) {
         int nextX = getX() + dir.getDx() * getSpeed();
         int nextY = getY() + dir.getDy() * getSpeed();
+
+        // Wrap kolom agar tepi kiri/kanan tidak salah dibaca sebagai WALL.
+        // Ini yang menyebabkan tunnel kanan tidak bisa dilewati: nextX >= mapWidth
+        // menghasilkan kolom out-of-bounds, dan getTile() mengembalikan WALL.
+        int mapWidth = gameMap.getCols() * tileSize;
+        if (nextX < 0)         nextX += mapWidth;
+        if (nextX >= mapWidth) nextX -= mapWidth;
+
         int leftCol   = nextX / tileSize;
         int rightCol  = (nextX + tileSize - 2) / tileSize;
         int topRow    = nextY / tileSize;
         int bottomRow = (nextY + tileSize - 2) / tileSize;
+
+        // Wrap kolom hasil pembagian juga (untuk rightCol saat nextX di tepi)
+        int totalCols = gameMap.getCols();
+        leftCol   = (leftCol  + totalCols) % totalCols;
+        rightCol  = (rightCol + totalCols) % totalCols;
+
         return gameMap.isWalkable(topRow, leftCol)
             && gameMap.isWalkable(topRow, rightCol)
             && gameMap.isWalkable(bottomRow, leftCol)
@@ -81,9 +95,9 @@ public class PacMan extends Entity {
         int newX = getX() + getDirection().getDx() * getSpeed();
         int newY = getY() + getDirection().getDy() * getSpeed();
 
-        // Tunnel wrap kiri-kanan
+        // Tunnel wrap kiri-kanan (simetris: < 0 dan >= mapWidth)
         int mapWidth = gameMap.getCols() * tileSize;
-        if (newX < -tileSize)  newX = mapWidth - tileSize;
+        if (newX < 0)          newX = mapWidth - tileSize;
         if (newX >= mapWidth)  newX = 0;
 
         setX(newX);

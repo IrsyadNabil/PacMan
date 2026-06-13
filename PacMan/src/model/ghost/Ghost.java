@@ -249,6 +249,8 @@ public abstract class Ghost extends Entity {
      * Daftar arah valid dari tile (row, col).
      * Ghost tidak boleh balik 180° kecuali di dead end.
      * Ghost tidak boleh masuk ke tile WALL.
+     * Ghost tidak boleh masuk ke tile GHOST_HOUSE (tipe 4) kecuali sedang EATEN.
+     * Ini mencegah ghost yang baru keluar rumah masuk kembali dan berputar di sana.
      */
     private List<Direction> getValidDirections(int row, int col) {
         List<Direction> list = new ArrayList<>();
@@ -258,7 +260,10 @@ public abstract class Ghost extends Entity {
             if (dir == current.opposite()) continue; // dilarang balik 180°
             int nr = row + dir.getDy();
             int nc = col + dir.getDx();
-            if (gameMap.isWalkable(nr, nc)) list.add(dir);
+            if (!gameMap.isWalkable(nr, nc)) continue;
+            // Larang masuk ghost house kecuali saat EATEN (kembali ke spawn)
+            if (gameMap.getTile(nr, nc) == GameMap.GHOST_HOUSE && mode != GhostMode.EATEN) continue;
+            list.add(dir);
         }
         return list;
     }
