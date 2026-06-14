@@ -31,8 +31,7 @@ public abstract class Ghost extends Entity {
         CHASE,
         SCATTER,
         FRIGHTENED,
-        EATEN,       // kembali ke spawn (tampil hanya mata)
-        RESPAWNING,  // diam di spawn, tunggu timer
+        EATEN,     // kembali ke spawn mengikuti lintasan map (tampil hanya mata)
         IN_HOUSE,    // belum keluar — menunggu di dalam rumah
         EXITING      // sedang berjalan keluar dari rumah ke koridor
     }
@@ -40,7 +39,6 @@ public abstract class Ghost extends Entity {
     // ── Konstanta ─────────────────────────────────────────────────────────────
     private static final int FRIGHTENED_DURATION = 300; // ~5 detik @ 60fps
     private static final int FLASH_START         = 80;
-    private static final int RESPAWN_DURATION    = 180; // ~3 detik
     protected static final int SPEED_NORMAL      = 2;
     private static final int SPEED_FRIGHTENED    = 1;
     private static final int SPEED_EATEN         = 4;
@@ -58,7 +56,6 @@ public abstract class Ghost extends Entity {
     private int houseTimer;       // frame tunggu sebelum mulai keluar
     private int frightenedTimer;
     private boolean flashingWhite;
-    private int respawnTimer;
 
     // Titik spawn permanen (pixel) — ghost kembali ke sini setelah dimakan
     private final int spawnX;
@@ -137,18 +134,11 @@ public abstract class Ghost extends Entity {
                 return;
             }
 
-            // ── RESPAWNING: diam di spawn, hitung mundur ────────────────────
-            case RESPAWNING:
-                respawnTimer--;
-                if (respawnTimer <= 0) {
-                    // Keluar lagi melalui jalur yang sama
-                    mode = GhostMode.EXITING;
-                    setX(spawnX);
-                    setY(spawnY);
-                    setSpeed(SPEED_HOUSE);
-                    setDirection(Direction.UP);
-                }
-                return;
+            // ── EATEN: ikuti lintasan map tile-by-tile menuju spawn ──────────
+            // chooseNewDirection menarget spawnX/spawnY, tile GHOST_HOUSE
+            // diizinkan saat EATEN (lihat getValidDirections).
+            case EATEN:
+                break; // lanjut ke gerak tile-by-tile di bawah
 
             default:
                 break;
@@ -166,8 +156,6 @@ public abstract class Ghost extends Entity {
         }
 
         // ── Gerak fisik tile-by-tile ─────────────────────────────────────────
-        // Ghost hanya mengambil keputusan arah saat tepat di center tile,
-        // lalu bergerak lurus sampai tile berikutnya.
         if (isAtTileCenter()) {
             snapToGrid();
             chooseNewDirection(getTileRow(), getTileCol());
@@ -179,8 +167,6 @@ public abstract class Ghost extends Entity {
         int newCol = (newX + tileSize / 2) / tileSize;
 
         if (!gameMap.isWalkable(newRow, newCol)) {
-            // Tabrak tembok (seharusnya tidak terjadi jika chooseNewDirection benar)
-            // Paksa pilih arah baru dari posisi saat ini
             chooseNewDirection(getTileRow(), getTileCol());
         } else {
             setX(newX);
@@ -189,14 +175,14 @@ public abstract class Ghost extends Entity {
 
         // ── Tunnel wrap kiri-kanan ───────────────────────────────────────────
         int mapWidth = gameMap.getCols() * tileSize;
-        if (getX() < 0)        setX(mapWidth - tileSize);
+        if (getX() < 0)         setX(mapWidth - tileSize);
         if (getX() >= mapWidth) setX(0);
 
-        // ── EATEN: cek apakah sudah sampai di spawn ──────────────────────────
-        if (mode == GhostMode.EATEN) {
-            if (getTileRow() == spawnY / tileSize && getTileCol() == spawnX / tileSize) {
-                arriveAtSpawn();
-            }
+        // ── EATEN: cek kedatangan di spawn ───────────────────────────────────
+        if (mode == GhostMode.EATEN
+                && Math.abs(getX() - spawnX) <= SPEED_EATEN
+                && Math.abs(getY() - spawnY) <= SPEED_EATEN) {
+            arriveAtSpawn();
         }
     }
 
@@ -287,8 +273,7 @@ public abstract class Ghost extends Entity {
         if (mode == GhostMode.IN_HOUSE
                 || mode == GhostMode.EXITING
                 || mode == GhostMode.FRIGHTENED
-                || mode == GhostMode.EATEN
-                || mode == GhostMode.RESPAWNING) return;
+                || mode == GhostMode.EATEN) return;
 
         // Pola klasik SCATTER/CHASE (frame @ 60fps)
         int t = globalTimer % 3360;
@@ -307,8 +292,8 @@ public abstract class Ghost extends Entity {
     // ── Events ────────────────────────────────────────────────────────────────
     /** Power pellet dimakan → ghost masuk FRIGHTENED */
     public void setFrightened() {
-        if (mode == GhostMode.EATEN || mode == GhostMode.RESPAWNING
-                || mode == GhostMode.IN_HOUSE || mode == GhostMode.EXITING) return;
+        if (mode == GhostMode.EATEN || mode == GhostMode.IN_HOUSE
+                || mode == GhostMode.EXITING) return;
         previousMode    = (mode == GhostMode.FRIGHTENED) ? previousMode : mode;
         mode            = GhostMode.FRIGHTENED;
         frightenedTimer = FRIGHTENED_DURATION;
@@ -325,15 +310,14 @@ public abstract class Ghost extends Entity {
         setSpeed(SPEED_EATEN);
     }
 
-    /** Ghost tiba di spawn setelah dimakan → RESPAWNING */
+    /** Ghost tiba di spawn setelah dimakan → langsung EXITING, tanpa delay */
     private void arriveAtSpawn() {
         setX(spawnX);
         setY(spawnY);
-        mode          = GhostMode.RESPAWNING;
-        respawnTimer  = RESPAWN_DURATION;
-        setSpeed(0);
+        mode         = GhostMode.EXITING;
+        previousMode = GhostMode.SCATTER;
+        setSpeed(SPEED_HOUSE);
         setDirection(Direction.UP);
-        previousMode  = GhostMode.SCATTER;
     }
 
     /** Reset penuh (level baru / Pac-Man mati / restart) */
@@ -343,7 +327,6 @@ public abstract class Ghost extends Entity {
         previousMode  = GhostMode.SCATTER;
         houseTimer    = houseDelay;
         frightenedTimer = 0;
-        respawnTimer  = 0;
         flashingWhite = false;
         setSpeed(SPEED_HOUSE);
         setDirection(Direction.UP);
@@ -353,7 +336,7 @@ public abstract class Ghost extends Entity {
     @Override
     public void render(Graphics2D g2d) {
         // Tidak terlihat saat diam respawning di dalam rumah
-        if (mode == GhostMode.RESPAWNING || mode == GhostMode.IN_HOUSE) return;
+        if (mode == GhostMode.IN_HOUSE) return;
 
         int x = getX(), y = getY(), w = tileSize - 2, h = tileSize - 2;
         Graphics2D g = (Graphics2D) g2d.create();
@@ -428,7 +411,6 @@ public abstract class Ghost extends Entity {
     public Color getNormalColor()    { return normalColor; }
     public boolean isFrightened()    { return mode == GhostMode.FRIGHTENED; }
     public boolean isEaten()         { return mode == GhostMode.EATEN; }
-    public boolean isRespawning()    { return mode == GhostMode.RESPAWNING; }
     public int getFrightenedTimer()  { return frightenedTimer; }
     public int getSpawnX()           { return spawnX; }
     public int getSpawnY()           { return spawnY; }

@@ -140,13 +140,11 @@ public class GameController {
 
     private void checkCollisions() {
         // Power Pellet baru dimakan → frighten semua ghost
+        // setFrightened() di Ghost.java sudah menjaga ghost EATEN/IN_HOUSE/EXITING
         if (pacman.hasPowerPelletJustEaten()) {
             gameState.resetGhostCombo();
             for (Ghost g : ghosts) {
-                // Ghost EATEN atau RESPAWNING tidak terpengaruh power pellet
-                if (!g.isEaten() && !g.isRespawning()) {
-                    g.setFrightened();
-                }
+                g.setFrightened();
             }
         }
 
@@ -157,12 +155,11 @@ public class GameController {
                 // Pac-Man memakan ghost → ghost masuk EATEN → kembali ke spawn
                 int points = gameState.getGhostEatenScore();
                 pacman.addScore(points);
-                // Tampilkan popup skor di posisi ghost
                 scorePopups.add(new ScorePopup(ghost.getX(), ghost.getY(), points));
                 ghost.setEaten();
 
-            } else if (!ghost.isEaten() && !ghost.isRespawning() && pacman.isAlive()) {
-                // Ghost normal menyentuh Pac-Man → hilang 1 nyawa
+            } else if (!ghost.isEaten() && pacman.isAlive()) {
+                // Ghost normal (SCATTER/CHASE) menyentuh Pac-Man → hilang 1 nyawa
                 pacman.die();
                 gameState.triggerDeathAnimation();
                 stateTimer = DEATH_ANIM_DURATION;
